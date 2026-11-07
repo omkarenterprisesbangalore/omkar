@@ -53,6 +53,13 @@ export default function Home() {
   return (
     <main ref={mainRef}>
       <FacilityHeroSequence />
+      <MachineryTitle />
+      <MimakiSequence />
+      <HandtopMachineSequence />
+      <GreyMachineSequence />
+      <TPSSequence />
+      <PrecisionMachineSequence />
+      <UltimateMachineSequence />
       <BrandSignages />
       <ChannelLetters />
       <FacadeSection />
@@ -62,13 +69,6 @@ export default function Home() {
       <TradeShowSection />
       <ArchGateSection />
       <VisualSection />
-      <MachineryTitle />
-      <MimakiSequence />
-      <HandtopMachineSequence />
-      <GreyMachineSequence />
-      <TPSSequence />
-      <PrecisionMachineSequence />
-      <UltimateMachineSequence />
       <IndiaMapSection />
       <BrandsPuzzle />
       <ISOSection />
