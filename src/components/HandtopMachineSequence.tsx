@@ -4,8 +4,6 @@ import { useEffect, useRef } from 'react';
 
 const FRAME_COUNT = 216;
 const FRAME_PATH = '/assets/handtop-turbo/frame_';
-const PREFETCH_RADIUS = 12;
-const MAX_IN_FLIGHT = 4;
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const ease = (value: number) => { const t = clamp(value); return t * t * (3 - 2 * t); };
 
@@ -28,12 +26,10 @@ export default function HandtopMachineSequence() {
     if (!section || !canvas || !panel || !ctx) return;
 
     const overlays = [...section.querySelectorAll<HTMLElement>('.handtop-machine-copy')];
-    const frames = new Map<number, HTMLImageElement>();
-    const inFlight = new Map<number, HTMLImageElement>();
-    const failed = new Set<number>();
+    const frames: HTMLImageElement[] = new Array(FRAME_COUNT);
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let frameRequest = 0;
-    let active = false;
+    let loaded = false;
     let disposed = false;
     let target = 0;
     let current = 0;
@@ -56,41 +52,22 @@ export default function HandtopMachineSequence() {
       lastTime = performance.now();
       frameRequest = requestAnimationFrame(render);
     };
-    const requestFrame = (index: number) => {
-      if (index < 0 || index >= FRAME_COUNT || frames.has(index) || inFlight.has(index) || failed.has(index)) return;
-      const image = new Image();
-      image.decoding = 'async';
-      inFlight.set(index, image);
-      image.onload = () => {
-        inFlight.delete(index);
-        if (disposed) return;
-        if (active) {
-          frames.set(index, image);
-          prepareFrames(Math.round(current * (FRAME_COUNT - 1)), Math.round(target * (FRAME_COUNT - 1)));
-        }
-        schedule();
-      };
-      image.onerror = () => {
-        inFlight.delete(index);
-        failed.add(index);
-        if (!disposed) schedule();
-      };
-      image.src = `${FRAME_PATH}${String(index + 1).padStart(6, '0')}.webp`;
-    };
-    const prepareFrames = (currentIndex: number, targetIndex: number) => {
-      if (!active) return;
-      // Keep only frames near the visible playhead and the scroll destination.
-      for (const index of frames.keys()) {
-        if (Math.abs(index - currentIndex) > PREFETCH_RADIUS + 2 &&
-            Math.abs(index - targetIndex) > PREFETCH_RADIUS + 2) frames.delete(index);
-      }
-      for (let distance = 0; distance <= PREFETCH_RADIUS && inFlight.size < MAX_IN_FLIGHT; distance++) {
-        for (const center of [currentIndex, targetIndex]) {
-          for (const index of distance ? [center + distance, center - distance] : [center]) {
-            if (inFlight.size >= MAX_IN_FLIGHT) break;
-            requestFrame(index);
-          }
-        }
+    // Download every frame once and keep it, like the other machine sections. Streaming a
+    // small window on demand looked fine locally but stalled on the live site's network.
+    const loadFrames = () => {
+      if (loaded) return;
+      loaded = true;
+      // Coarse pass first (every 4th frame) so the whole film can be scrubbed quickly,
+      // then fill in the frames between.
+      const order: number[] = [];
+      for (let i = 0; i < FRAME_COUNT; i += 4) order.push(i);
+      for (let i = 0; i < FRAME_COUNT; i++) if (i % 4) order.push(i);
+      for (const index of order) {
+        const image = new Image();
+        image.decoding = 'async';
+        image.onload = schedule;
+        image.src = `${FRAME_PATH}${String(index + 1).padStart(6, '0')}.webp`;
+        frames[index] = image;
       }
     };
 
@@ -113,17 +90,13 @@ export default function HandtopMachineSequence() {
       const progress = current;
 
       const index = Math.round(progress * (FRAME_COUNT - 1));
-      prepareFrames(index, Math.round(target * (FRAME_COUNT - 1)));
-      let base = frames.get(index);
+      let base: HTMLImageElement | undefined = frames[index];
       if (!ready(base)) {
-        // Hold the previous picture until a nearby frame is ready.
-        let nearestDistance = Infinity;
-        for (const [loadedIndex, image] of frames) {
-          const distance = Math.abs(loadedIndex - index);
-          if (ready(image) && distance < nearestDistance) {
-            base = image;
-            nearestDistance = distance;
-          }
+        // Show the nearest frame that has finished loading.
+        base = undefined;
+        for (let distance = 1; distance < FRAME_COUNT && !base; distance++) {
+          if (ready(frames[index - distance])) base = frames[index - distance];
+          else if (ready(frames[index + distance])) base = frames[index + distance];
         }
       }
       base ??= lastDrawn;
@@ -157,13 +130,7 @@ export default function HandtopMachineSequence() {
       schedule();
     };
     const observer = new IntersectionObserver(entries => {
-      active = entries[0].isIntersecting;
-      if (active) {
-        const rect = section.getBoundingClientRect();
-        const travel = section.offsetHeight - window.innerHeight;
-        const index = Math.round((travel > 0 ? clamp(-rect.top / travel) : 0) * (FRAME_COUNT - 1));
-        prepareFrames(index, index);
-      } else frames.clear();
+      if (entries[0].isIntersecting) loadFrames();
       schedule();
     }, { rootMargin: '200% 0px' });
     observer.observe(section);
@@ -176,9 +143,7 @@ export default function HandtopMachineSequence() {
       disposed = true;
       cancelAnimationFrame(frameRequest);
       observer.disconnect();
-      inFlight.forEach(frame => { frame.onload = null; frame.onerror = null; });
-      inFlight.clear();
-      frames.clear();
+      frames.forEach(frame => { frame.onload = null; });
       window.removeEventListener('scroll', schedule);
       window.removeEventListener('resize', resize);
       reducedMotion.removeEventListener('change', schedule);
